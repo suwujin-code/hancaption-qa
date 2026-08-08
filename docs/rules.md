@@ -53,7 +53,7 @@ Profiles are editorial starting points, not formal accessibility or broadcast sp
 | Maximum duration | 8 s | 6 s |
 | Duplicate gap window | 1.5 s | 1 s |
 
-Threshold configuration is intentionally kept inside the programmatic API for v0.1. A documented config file is planned after real usage reveals which options remain stable.
+Thresholds can be customized through `auditCaptions(..., { thresholds })`, a strict `.hancaptionrc.json` file, or the matching CLI flags. Project configuration is an editorial policy, not proof of broadcaster or jurisdictional compliance. `maxCps`, `maxLineChars`, `maxLines`, and `maxDurationMs` must be positive; `minDurationMs` and `duplicateGapMs` may be zero. Count and duration settings must be integers, and the minimum duration cannot exceed the maximum.
 
 ## Word-animation policy
 

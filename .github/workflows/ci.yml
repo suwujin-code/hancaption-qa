@@ -31,3 +31,23 @@ jobs:
           profile: short-video
           fail-on: error
           machine-generated: true
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run pack:check
+      - run: npm run pack:smoke
+      - name: Smoke-test local action
+        uses: ./
+        with:
+          path: test/fixtures/clean.srt
+          profile: short-video
+          fail-on: error
+          machine-generated: true

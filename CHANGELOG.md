@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add strict project-level `.hancaptionrc.json` configuration and CLI threshold overrides.
+- Add Windows CI coverage for tests, packaging, and the composite action.
+
 All notable changes to this project are documented here.
 
 ## 0.1.0 — 2026-08-08

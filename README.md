@@ -69,6 +69,28 @@ Audit machine-generated JSON and require a human text review:
 hancaption whisper.json --machine-generated --format sarif --output hancaption.sarif
 ```
 
+## Project configuration
+
+Place `.hancaptionrc.json` in the directory where the command runs, or pass an explicit file with `--config`. Explicit configuration replaces automatic discovery; CLI flags override the selected file.
+
+```json
+{
+  "profile": "short-video",
+  "failOn": "warning",
+  "machineGenerated": true,
+  "thresholds": {
+    "maxCps": 14,
+    "maxLineChars": 20,
+    "maxLines": 2,
+    "minDurationMs": 400,
+    "maxDurationMs": 6000,
+    "duplicateGapMs": 1000
+  }
+}
+```
+
+Only the documented keys are accepted. Use `--no-machine-generated` to override a configured `true`; threshold flags such as `--max-cps 16` override individual configured values. Configuration errors show only the file basename, not its absolute path.
+
 Exit codes:
 
 - `0`: the selected failure threshold was not reached;

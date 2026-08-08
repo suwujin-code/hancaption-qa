@@ -54,3 +54,139 @@ test("CLI read errors do not disclose the input directory", async () => {
     (error) => error.code === 2 && /secret\.srt/.test(error.stderr) && !error.stderr.includes("/definitely/private/project"),
   );
 });
+
+test("CLI auto-loads project configuration and applies thresholds", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hancaption-config-"));
+  await fs.writeFile(path.join(directory, ".hancaptionrc.json"), JSON.stringify({
+    profile: "short-video",
+    failOn: "never",
+    machineGenerated: true,
+    thresholds: { maxCps: 1 },
+  }), "utf8");
+  try {
+    const { stdout } = await exec(process.execPath, [cli.pathname, clean.pathname, "--format", "json"], { cwd: directory });
+    const report = JSON.parse(stdout);
+    assert.equal(report.profile, "short-video");
+    assert.equal(report.config.maxCps, 1);
+    assert.equal(report.summary.textReviewRequired, true);
+    assert.ok(report.summary.warning > 0);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit config replaces auto-config and CLI flags win", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hancaption-config-"));
+  await fs.writeFile(path.join(directory, ".hancaptionrc.json"), JSON.stringify({ profile: "short-video", failOn: "warning" }), "utf8");
+  await fs.writeFile(path.join(directory, "explicit.json"), JSON.stringify({ profile: "general", machineGenerated: true, thresholds: { maxCps: 1 } }), "utf8");
+  try {
+    const { stdout } = await exec(process.execPath, [
+      cli.pathname,
+      clean.pathname,
+      "--config", "explicit.json",
+      "--profile", "short-video",
+      "--no-machine-generated",
+      "--max-cps", "99",
+      "--format", "json",
+    ], { cwd: directory });
+    const report = JSON.parse(stdout);
+    assert.equal(report.profile, "short-video");
+    assert.equal(report.config.maxCps, 99);
+    assert.equal(report.summary.textReviewRequired, false);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects malformed and unknown configuration without disclosing directories", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hancaption-private-"));
+  const malformed = path.join(directory, "malformed.json");
+  const unknown = path.join(directory, "unknown.json");
+  await fs.writeFile(malformed, "{", "utf8");
+  await fs.writeFile(unknown, JSON.stringify({ output: "report.html" }), "utf8");
+  try {
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--config", malformed]),
+      (error) => error.code === 2 && /malformed\.json/.test(error.stderr) && /malformed JSON/.test(error.stderr) && !error.stderr.includes(directory),
+    );
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--config", unknown]),
+      (error) => error.code === 2 && /unknown key/.test(error.stderr) && !error.stderr.includes(directory),
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects invalid thresholds and a missing explicit config", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hancaption-config-"));
+  const invalid = path.join(directory, "invalid.json");
+  await fs.writeFile(invalid, JSON.stringify({ thresholds: { minDurationMs: 900, maxDurationMs: 100 } }), "utf8");
+  try {
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--config", invalid]),
+      (error) => error.code === 2 && /minDurationMs cannot exceed maxDurationMs/.test(error.stderr),
+    );
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--config", path.join(directory, "missing.json")]),
+      (error) => error.code === 2 && /missing\.json/.test(error.stderr) && !error.stderr.includes(directory),
+    );
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--max-lines", "1.5"]),
+      (error) => error.code === 2 && /maxLines/.test(error.stderr),
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CLI revalidates merged thresholds after precedence resolution", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hancaption-config-"));
+  const config = path.join(directory, "config.json");
+  await fs.writeFile(config, JSON.stringify({ thresholds: { minDurationMs: 900 } }), "utf8");
+  try {
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--config", config, "--max-duration-ms", "100"]),
+      (error) => error.code === 2 && /minDurationMs cannot exceed maxDurationMs/.test(error.stderr),
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("CLI accepts only safe, plain decimal threshold arguments", async () => {
+  for (const [option, value] of [
+    ["--min-duration-ms", ""],
+    ["--duplicate-gap-ms", " "],
+    ["--max-cps", "0x10"],
+    ["--max-cps", "9007199254740992"],
+    ["--max-lines", "9007199254740992"],
+  ]) {
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, option, value]),
+      (error) => error.code === 2,
+    );
+  }
+  const { stdout } = await exec(process.execPath, [cli.pathname, clean.pathname, "--max-cps", "1.5", "--format", "json"]);
+  assert.equal(JSON.parse(stdout).config.maxCps, 1.5);
+
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hancaption-config-"));
+  const config = path.join(directory, "unsafe.json");
+  await fs.writeFile(config, JSON.stringify({ thresholds: { maxCps: 9007199254740992 } }), "utf8");
+  try {
+    await assert.rejects(
+      exec(process.execPath, [cli.pathname, clean.pathname, "--config", config]),
+      (error) => error.code === 2 && /maxCps/.test(error.stderr),
+    );
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("configuration read errors redact Windows-style directories", async () => {
+  const windowsPath = "C:\\private\\captions\\config.json";
+  await assert.rejects(
+    exec(process.execPath, [cli.pathname, clean.pathname, "--config", windowsPath]),
+    (error) => error.code === 2 && /config\.json/.test(error.stderr) && !error.stderr.includes("private") && !error.stderr.includes("captions"),
+  );
+});
