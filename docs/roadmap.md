@@ -13,7 +13,6 @@ This roadmap is evidence-driven. Items move into a release only after a reproduc
 
 ## Candidate v0.2 work
 
-- A documented configuration file with project-level overrides.
 - Safer opt-in fixes that always preserve an input backup or write a new file.
 - TTML parsing.
 - Better ASS override-tag and karaoke timing support.
