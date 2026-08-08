@@ -47,7 +47,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "lint": "node --check src/*.js && node --check test/*.test.js",
+    "lint": "node scripts/lint.mjs",
     "check": "npm run lint && npm test",
     "demo": "node src/cli.js examples/problematic.srt --format text --fail-on never",
     "pack:check": "npm pack --dry-run",

@@ -4,6 +4,7 @@
 
 - Add strict project-level `.hancaptionrc.json` configuration and CLI threshold overrides.
 - Add Windows CI coverage for tests, packaging, and the composite action.
+- Make syntax checks independent of shell glob expansion.
 
 All notable changes to this project are documented here.
 
