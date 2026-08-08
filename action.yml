@@ -1,0 +1,51 @@
+name: HanCaption QA
+description: Audit Chinese and AI-generated subtitle files without uploading media.
+branding:
+  icon: check-circle
+  color: blue
+inputs:
+  path:
+    description: Subtitle file to audit
+    required: true
+  profile:
+    description: general or short-video
+    required: false
+    default: general
+  fail-on:
+    description: error, warning, or never
+    required: false
+    default: error
+  format:
+    description: text, json, html, or sarif
+    required: false
+    default: text
+  input-format:
+    description: auto, srt, vtt, ass, or json
+    required: false
+    default: auto
+  machine-generated:
+    description: Require human text review for machine-generated text
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Audit subtitles
+      shell: bash
+      env:
+        HC_PATH: ${{ inputs.path }}
+        HC_PROFILE: ${{ inputs.profile }}
+        HC_FAIL_ON: ${{ inputs.fail-on }}
+        HC_FORMAT: ${{ inputs.format }}
+        HC_INPUT_FORMAT: ${{ inputs.input-format }}
+        HC_MACHINE_GENERATED: ${{ inputs.machine-generated }}
+      run: |
+        set -euo pipefail
+        case "$HC_PROFILE" in general|short-video) ;; *) echo "Invalid profile" >&2; exit 2 ;; esac
+        case "$HC_FAIL_ON" in error|warning|never) ;; *) echo "Invalid fail-on" >&2; exit 2 ;; esac
+        case "$HC_FORMAT" in text|json|html|sarif) ;; *) echo "Invalid format" >&2; exit 2 ;; esac
+        case "$HC_INPUT_FORMAT" in auto|srt|vtt|ass|json) ;; *) echo "Invalid input-format" >&2; exit 2 ;; esac
+        case "$HC_MACHINE_GENERATED" in true|false) ;; *) echo "Invalid machine-generated" >&2; exit 2 ;; esac
+        args=("$HC_PATH" --profile "$HC_PROFILE" --fail-on "$HC_FAIL_ON" --format "$HC_FORMAT" --input-format "$HC_INPUT_FORMAT")
+        if [[ "$HC_MACHINE_GENERATED" == "true" ]]; then args+=(--machine-generated); fi
+        node "$GITHUB_ACTION_PATH/src/cli.js" "${args[@]}"

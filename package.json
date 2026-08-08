@@ -1,0 +1,56 @@
+{
+  "name": "hancaption-qa",
+  "version": "0.1.0",
+  "description": "Offline-first QA for Chinese and AI-generated subtitles.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "suwujin-code",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suwujin-code/hancaption-qa.git"
+  },
+  "homepage": "https://github.com/suwujin-code/hancaption-qa#readme",
+  "bugs": "https://github.com/suwujin-code/hancaption-qa/issues",
+  "keywords": [
+    "subtitle",
+    "caption",
+    "srt",
+    "webvtt",
+    "ass",
+    "whisper",
+    "sensevoice",
+    "chinese",
+    "cantonese",
+    "quality-assurance"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "hancaption": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "docs",
+    "examples",
+    "action.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "lint": "node --check src/*.js && node --check test/*.test.js",
+    "check": "npm run lint && npm test",
+    "demo": "node src/cli.js examples/problematic.srt --format text --fail-on never",
+    "pack:check": "npm pack --dry-run",
+    "pack:smoke": "node scripts/pack-smoke.mjs"
+  }
+}

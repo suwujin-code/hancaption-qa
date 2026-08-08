@@ -1,0 +1,25 @@
+name: Rule proposal
+description: Propose a new subtitle quality rule or threshold change
+title: "[Rule]: "
+labels: [rule-proposal]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workflow problem
+      description: Explain who is affected and provide a synthetic example.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or authoritative reference
+      description: Distinguish a personal preference from a formal specification.
+    validations:
+      required: true
+  - type: textarea
+    id: falsepositives
+    attributes:
+      label: False-positive and language risks
+    validations:
+      required: true
