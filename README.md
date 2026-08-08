@@ -38,7 +38,13 @@ npm install
 node src/cli.js examples/problematic.srt --profile short-video --fail-on never
 ```
 
-Install globally after the npm package is published:
+Install the signed-off GitHub release package:
+
+```bash
+npm install --global https://github.com/suwujin-code/hancaption-qa/releases/download/v0.1.0/hancaption-qa-0.1.0.tgz
+```
+
+Install from npm after the registry package is published:
 
 ```bash
 npm install --global hancaption-qa
