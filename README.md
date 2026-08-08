@@ -41,7 +41,7 @@ node src/cli.js examples/problematic.srt --profile short-video --fail-on never
 Install the signed-off GitHub release package:
 
 ```bash
-npm install --global https://github.com/suwujin-code/hancaption-qa/releases/download/v0.1.0/hancaption-qa-0.1.0.tgz
+npm install --global https://github.com/suwujin-code/hancaption-qa/releases/download/v0.1.1/hancaption-qa-0.1.1.tgz
 ```
 
 Install from npm after the registry package is published:
@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: suwujin-code/hancaption-qa@v0.1.0
+      - uses: suwujin-code/hancaption-qa@v0.1.1
         with:
           path: subtitles/final.srt
           profile: short-video
