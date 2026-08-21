@@ -26,6 +26,14 @@ jobs:
           openssl pkey -in "$RUNNER_TEMP/private.pem" -pubout -out "$RUNNER_TEMP/public.pem" >/dev/null 2>&1
           printf 'EPHEMERAL_PUBKEY_B64=%s\n' "$(base64 -w0 "$RUNNER_TEMP/public.pem")"
 
+      - name: Publish ephemeral public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-ephemeral-public-key
+          path: ${{ runner.temp }}/public.pem
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Wait for encrypted Fish credential
         shell: bash
         env:
