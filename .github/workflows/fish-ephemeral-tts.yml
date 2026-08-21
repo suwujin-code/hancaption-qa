@@ -1,0 +1,161 @@
+name: Fish Ephemeral TTS Bridge
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fish-ephemeral-tts.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fish-ephemeral-tts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FISH_MODEL: s2.1-pro-free
+
+    steps:
+      - name: Generate ephemeral RSA keypair
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$RUNNER_TEMP/private.pem" >/dev/null 2>&1
+          openssl pkey -in "$RUNNER_TEMP/private.pem" -pubout -out "$RUNNER_TEMP/public.pem" >/dev/null 2>&1
+          printf 'EPHEMERAL_PUBKEY_B64=%s\n' "$(base64 -w0 "$RUNNER_TEMP/public.pem")"
+
+      - name: Wait for encrypted Fish credential
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          REF='${{ github.event.pull_request.head.ref }}'
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/.tmp/fish-key.enc.b64?ref=${REF}"
+          found=0
+          for attempt in $(seq 1 72); do
+            code="$(curl -sS \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -o "$RUNNER_TEMP/cipher.json" \
+              -w '%{http_code}' \
+              "$API" || true)"
+            if [ "$code" = '200' ]; then
+              found=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$found" != '1' ]; then
+            echo 'Timed out waiting for encrypted credential.'
+            exit 1
+          fi
+          python3 - "$RUNNER_TEMP/cipher.json" "$RUNNER_TEMP/fish-key.enc" <<'PY'
+          import base64, json, sys
+          src, dst = sys.argv[1:]
+          data = json.load(open(src, encoding='utf-8'))
+          text = base64.b64decode(data['content']).decode('ascii').strip()
+          open(dst, 'wb').write(base64.b64decode(text))
+          PY
+          test -s "$RUNNER_TEMP/fish-key.enc"
+
+      - name: Decrypt credential in runner memory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$(openssl pkeyutl -decrypt \
+            -inkey "$RUNNER_TEMP/private.pem" \
+            -in "$RUNNER_TEMP/fish-key.enc" \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256)"
+          test -n "$key"
+          case "$key" in sk-fish-*) ;; *) echo 'Decrypted credential format check failed.'; exit 1;; esac
+          echo "::add-mask::$key"
+          printf 'FISH_AUDIO_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+
+      - name: Generate Fish Audio MP3
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OUT="$RUNNER_TEMP/fish-audio-smoke"
+          mkdir -p "$OUT"
+          cat > "$OUT/payload.json" <<'JSON'
+          {
+            "text": "你好，这是一段 Fish Audio 配音测试。如果你能听到这段声音，说明接口已经正常工作。",
+            "format": "mp3",
+            "temperature": 0.7,
+            "top_p": 0.7,
+            "prosody": {
+              "speed": 1,
+              "volume": 0,
+              "normalize_loudness": true
+            }
+          }
+          JSON
+
+          http_code="$(curl -sS \
+            --retry 2 \
+            --connect-timeout 10 \
+            --max-time 120 \
+            --request POST \
+            --url https://api.fish.audio/v1/tts \
+            --header "Authorization: Bearer ${FISH_AUDIO_API_KEY}" \
+            --header 'Content-Type: application/json' \
+            --header "model: ${FISH_MODEL}" \
+            --data-binary "@$OUT/payload.json" \
+            --output "$OUT/fish_audio_test.mp3" \
+            --write-out '%{http_code}')"
+
+          echo "Fish TTS HTTP status: ${http_code}"
+          if [[ ! "$http_code" =~ ^2 ]]; then
+            python3 - "$OUT/fish_audio_test.mp3" <<'PY'
+          import json, sys
+          try:
+              d=json.load(open(sys.argv[1], encoding='utf-8'))
+              print('Fish error:', d.get('status'), d.get('message','request failed'))
+          except Exception:
+              print('Fish TTS request failed with a non-2xx response.')
+          PY
+            exit 1
+          fi
+
+          test -s "$OUT/fish_audio_test.mp3"
+          bytes="$(stat -c%s "$OUT/fish_audio_test.mp3")"
+          test "$bytes" -gt 1000
+          mime="$(file -b --mime-type "$OUT/fish_audio_test.mp3")"
+          sha256="$(sha256sum "$OUT/fish_audio_test.mp3" | awk '{print $1}')"
+          python3 - "$OUT/qa.json" "$http_code" "$bytes" "$mime" "$sha256" <<'PY'
+          import json, sys
+          path, http_code, size, mime, sha = sys.argv[1:]
+          json.dump({
+              'provider': 'Fish Audio',
+              'model': 's2.1-pro-free',
+              'http_status': int(http_code),
+              'bytes': int(size),
+              'mime': mime,
+              'sha256': sha,
+              'test_text': '你好，这是一段 Fish Audio 配音测试。如果你能听到这段声音，说明接口已经正常工作。'
+          }, open(path,'w',encoding='utf-8'), ensure_ascii=False, indent=2)
+          PY
+          cat "$OUT/qa.json"
+
+      - name: Upload generated audio
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-audio-smoke
+          path: |
+            ${{ runner.temp }}/fish-audio-smoke/fish_audio_test.mp3
+            ${{ runner.temp }}/fish-audio-smoke/qa.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Destroy ephemeral private material
+        if: always()
+        shell: bash
+        run: |
+          shred -u "$RUNNER_TEMP/private.pem" "$RUNNER_TEMP/fish-key.enc" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/public.pem" "$RUNNER_TEMP/cipher.json" 2>/dev/null || true
