@@ -16,7 +16,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake build-essential espeak-ng ffmpeg
+          sudo apt-get install -y --no-install-recommends cmake build-essential ffmpeg python3-pip
+          python3 -m pip install --disable-pip-version-check edge-tts
 
       - name: Build whisper.cpp v1.8.6
         run: |
@@ -25,25 +26,29 @@ jobs:
           cmake --build whisper.cpp/build --config Release -j2
           whisper.cpp/build/bin/whisper-cli --help | head -40 | tee whisper_help.txt
 
-      - name: Download and verify multilingual tiny q5_1
+      - name: Download and verify multilingual base q5_1
         run: |
           curl -L --fail --retry 3 \
-            -o ggml-tiny-q5_1.bin \
-            https://github.com/w3xgroup/taskurio-models/releases/download/whisper-models-v1/ggml-tiny-q5_1.bin
-          echo '818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7  ggml-tiny-q5_1.bin' | sha256sum -c -
+            -o ggml-base-q5_1.bin \
+            https://github.com/w3xgroup/taskurio-models/releases/download/whisper-models-v1/ggml-base-q5_1.bin
+          echo '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898  ggml-base-q5_1.bin' | sha256sum -c -
 
-      - name: Generate deterministic Chinese speech probe
+      - name: Generate natural Mandarin speech probe
         run: |
           printf '%s\n' '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。' > expected.txt
-          espeak-ng -v cmn -s 135 -w probe_raw.wav '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。'
-          ffmpeg -hide_banner -loglevel error -y -i probe_raw.wav -ar 16000 -ac 1 -c:a pcm_s16le probe.wav
+          edge-tts \
+            --voice zh-CN-XiaoxiaoNeural \
+            --rate=-5% \
+            --text '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。' \
+            --write-media probe.mp3
+          ffmpeg -hide_banner -loglevel error -y -i probe.mp3 -ar 16000 -ac 1 -c:a pcm_s16le probe.wav
           ffprobe -v error -show_entries format=duration -of default=nw=1 probe.wav | tee audio_probe.txt
 
       - name: Run real Whisper transcription
         run: |
           set -o pipefail
           whisper.cpp/build/bin/whisper-cli \
-            -m ggml-tiny-q5_1.bin \
+            -m ggml-base-q5_1.bin \
             -f probe.wav \
             -l zh \
             -otxt -oj \
@@ -52,35 +57,48 @@ jobs:
           test -s whisper_probe.txt
           test -s whisper_probe.json
 
-      - name: Build machine-readable receipt
+      - name: Enforce semantic ASR quality gate
         run: |
           python3 - <<'PY'
-          import hashlib, json, pathlib, subprocess
+          import hashlib, json, pathlib, re
           expected = pathlib.Path('expected.txt').read_text(encoding='utf-8').strip()
           actual = pathlib.Path('whisper_probe.txt').read_text(encoding='utf-8').strip()
-          model = pathlib.Path('ggml-tiny-q5_1.bin')
+          compact = re.sub(r'[\s，。！？、,.!?;；:：]', '', actual)
+          groups = {
+              'water_electric': ['水电', '水電'],
+              'price': ['价格', '價格'],
+              'construction': ['施工'],
+          }
+          hits = {k: any(v in compact for v in variants) for k, variants in groups.items()}
+          hit_count = sum(hits.values())
+          quality_pass = bool(actual) and hit_count >= 2 and len(compact) >= 10
+          model = pathlib.Path('ggml-base-q5_1.bin')
           receipt = {
               'gate': 'ASR_REMOTE_WHISPER_RUNTIME',
-              'status': 'PASS' if actual else 'FAIL',
+              'status': 'PASS' if quality_pass else 'FAIL',
               'whisper_cpp': 'v1.8.6',
-              'model': 'ggml-tiny-q5_1.bin',
+              'model': 'ggml-base-q5_1.bin',
               'model_sha256': hashlib.sha256(model.read_bytes()).hexdigest(),
               'language': 'zh',
+              'tts': 'edge-tts zh-CN-XiaoxiaoNeural',
               'expected_probe': expected,
               'actual_transcript': actual,
-              'keyword_hits': {k: (k in actual) for k in ['水电', '价格', '施工']},
-              'truth_boundary': 'Synthetic Chinese speech probe; validates real Whisper runtime/provider path, not final raw-talking-head editorial quality.'
+              'keyword_hits': hits,
+              'keyword_hit_count': hit_count,
+              'quality_rule': 'non-empty + >=2/3 semantic keyword groups + >=10 compact characters',
+              'truth_boundary': 'Synthetic natural-Mandarin probe; validates real Whisper runtime/provider quality path, not final raw-talking-head editorial quality.'
           }
           pathlib.Path('asr_runtime_receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
           print(json.dumps(receipt, ensure_ascii=False, indent=2))
-          if not actual:
+          if not quality_pass:
               raise SystemExit(2)
           PY
 
       - name: Upload ASR proof
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shortform-editor-asr-runtime-proof
+          name: shortform-editor-asr-runtime-proof-v2
           path: |
             asr_runtime_receipt.json
             expected.txt
@@ -89,5 +107,5 @@ jobs:
             whisper_runtime.log
             audio_probe.txt
             whisper_help.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 3
