@@ -1,0 +1,93 @@
+name: ASR Runtime Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/asr-runtime-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  whisper-runtime-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake build-essential espeak-ng ffmpeg
+
+      - name: Build whisper.cpp v1.8.6
+        run: |
+          git clone --depth 1 --branch v1.8.6 https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build whisper.cpp/build --config Release -j2
+          whisper.cpp/build/bin/whisper-cli --help | head -40 | tee whisper_help.txt
+
+      - name: Download and verify multilingual tiny q5_1
+        run: |
+          curl -L --fail --retry 3 \
+            -o ggml-tiny-q5_1.bin \
+            https://github.com/w3xgroup/taskurio-models/releases/download/whisper-models-v1/ggml-tiny-q5_1.bin
+          echo '818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7  ggml-tiny-q5_1.bin' | sha256sum -c -
+
+      - name: Generate deterministic Chinese speech probe
+        run: |
+          printf '%s\n' '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。' > expected.txt
+          espeak-ng -v cmn -s 135 -w probe_raw.wav '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。'
+          ffmpeg -hide_banner -loglevel error -y -i probe_raw.wav -ar 16000 -ac 1 -c:a pcm_s16le probe.wav
+          ffprobe -v error -show_entries format=duration -of default=nw=1 probe.wav | tee audio_probe.txt
+
+      - name: Run real Whisper transcription
+        run: |
+          set -o pipefail
+          whisper.cpp/build/bin/whisper-cli \
+            -m ggml-tiny-q5_1.bin \
+            -f probe.wav \
+            -l zh \
+            -otxt -oj \
+            -of whisper_probe \
+            2>&1 | tee whisper_runtime.log
+          test -s whisper_probe.txt
+          test -s whisper_probe.json
+
+      - name: Build machine-readable receipt
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          expected = pathlib.Path('expected.txt').read_text(encoding='utf-8').strip()
+          actual = pathlib.Path('whisper_probe.txt').read_text(encoding='utf-8').strip()
+          model = pathlib.Path('ggml-tiny-q5_1.bin')
+          receipt = {
+              'gate': 'ASR_REMOTE_WHISPER_RUNTIME',
+              'status': 'PASS' if actual else 'FAIL',
+              'whisper_cpp': 'v1.8.6',
+              'model': 'ggml-tiny-q5_1.bin',
+              'model_sha256': hashlib.sha256(model.read_bytes()).hexdigest(),
+              'language': 'zh',
+              'expected_probe': expected,
+              'actual_transcript': actual,
+              'keyword_hits': {k: (k in actual) for k in ['水电', '价格', '施工']},
+              'truth_boundary': 'Synthetic Chinese speech probe; validates real Whisper runtime/provider path, not final raw-talking-head editorial quality.'
+          }
+          pathlib.Path('asr_runtime_receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
+          print(json.dumps(receipt, ensure_ascii=False, indent=2))
+          if not actual:
+              raise SystemExit(2)
+          PY
+
+      - name: Upload ASR proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: shortform-editor-asr-runtime-proof
+          path: |
+            asr_runtime_receipt.json
+            expected.txt
+            whisper_probe.txt
+            whisper_probe.json
+            whisper_runtime.log
+            audio_probe.txt
+            whisper_help.txt
+          if-no-files-found: error
+          retention-days: 3
