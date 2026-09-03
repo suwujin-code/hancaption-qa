@@ -19,12 +19,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake build-essential ffmpeg python3-pip
           python3 -m pip install --disable-pip-version-check edge-tts
 
-      - name: Build whisper.cpp v1.8.6
+      - name: Build portable whisper.cpp v1.8.6
         run: |
           git clone --depth 1 --branch v1.8.6 https://github.com/ggml-org/whisper.cpp.git whisper.cpp
-          cmake -S whisper.cpp -B whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake -S whisper.cpp -B whisper.cpp/build \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DBUILD_SHARED_LIBS=OFF
           cmake --build whisper.cpp/build --config Release -j2
           whisper.cpp/build/bin/whisper-cli --help | head -40 | tee whisper_help.txt
+          ldd whisper.cpp/build/bin/whisper-cli | tee whisper_ldd.txt
 
       - name: Download and verify multilingual base q5_1
         run: |
@@ -94,11 +98,35 @@ jobs:
               raise SystemExit(2)
           PY
 
-      - name: Upload ASR proof
+      - name: Package portable sandbox runtime
+        if: success()
+        run: |
+          mkdir -p runtime_bundle/bin runtime_bundle/models
+          cp whisper.cpp/build/bin/whisper-cli runtime_bundle/bin/whisper-cli
+          cp ggml-base-q5_1.bin runtime_bundle/models/ggml-base-q5_1.bin
+          chmod +x runtime_bundle/bin/whisper-cli
+          sha256sum runtime_bundle/bin/whisper-cli runtime_bundle/models/ggml-base-q5_1.bin | tee runtime_bundle/SHA256SUMS.txt
+          cp whisper_ldd.txt runtime_bundle/whisper_ldd.txt
+          cat > runtime_bundle/RUNTIME_MANIFEST.json <<'JSON'
+          {
+            "schema": "oing.asr-runtime-bundle/v1",
+            "platform": "linux-x86_64",
+            "whisper_cpp": "v1.8.6",
+            "build_shared_libs": false,
+            "model": "ggml-base-q5_1.bin",
+            "model_sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+            "purpose": "Portable sandbox/runtime bootstrap for OING Short-form Editor Brain ASR gate"
+          }
+          JSON
+          tar -czf whisper_runtime_linux_x64.tar.gz runtime_bundle
+          sha256sum whisper_runtime_linux_x64.tar.gz | tee whisper_runtime_linux_x64.tar.gz.sha256
+
+      - name: Upload ASR proof and portable runtime
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shortform-editor-asr-runtime-proof-v2
+          name: shortform-editor-asr-runtime-proof-v3
+          compression-level: 0
           path: |
             asr_runtime_receipt.json
             expected.txt
@@ -107,5 +135,8 @@ jobs:
             whisper_runtime.log
             audio_probe.txt
             whisper_help.txt
+            whisper_ldd.txt
+            whisper_runtime_linux_x64.tar.gz
+            whisper_runtime_linux_x64.tar.gz.sha256
           if-no-files-found: warn
           retention-days: 3
