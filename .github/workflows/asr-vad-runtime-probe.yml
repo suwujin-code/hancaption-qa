@@ -1,0 +1,112 @@
+name: ASR VAD Runtime Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/asr-vad-runtime-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  whisper-vad-runtime-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake build-essential ffmpeg python3-pip
+          python3 -m pip install --disable-pip-version-check edge-tts
+
+      - name: Build portable whisper.cpp v1.8.6
+        run: |
+          git clone --depth 1 --branch v1.8.6 https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF
+          cmake --build whisper.cpp/build --config Release -j2
+
+      - name: Download base model and Silero VAD
+        run: |
+          curl -L --fail --retry 3 -o ggml-base-q5_1.bin https://github.com/w3xgroup/taskurio-models/releases/download/whisper-models-v1/ggml-base-q5_1.bin
+          echo '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898  ggml-base-q5_1.bin' | sha256sum -c -
+          curl -L --fail --retry 3 -o ggml-silero-v6.2.0.bin https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
+          sha256sum ggml-silero-v6.2.0.bin | tee vad_sha256.txt
+
+      - name: Generate Mandarin probe
+        run: |
+          printf '%s\n' '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。' > expected.txt
+          edge-tts --voice zh-CN-XiaoxiaoNeural --rate=-5% --text '水电改造最容易踩坑的并不是价格，真正需要检查的是施工规范。' --write-media probe.mp3
+          ffmpeg -hide_banner -loglevel error -y -i probe.mp3 -ar 16000 -ac 1 -c:a pcm_s16le probe.wav
+
+      - name: Run Whisper with VAD
+        run: |
+          set -o pipefail
+          whisper.cpp/build/bin/whisper-cli -m ggml-base-q5_1.bin -f probe.wav -l zh --vad -vm ggml-silero-v6.2.0.bin -otxt -oj -of whisper_probe_vad 2>&1 | tee whisper_vad_runtime.log
+          test -s whisper_probe_vad.txt
+          test -s whisper_probe_vad.json
+
+      - name: Enforce semantic quality gate
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, re
+          actual = pathlib.Path('whisper_probe_vad.txt').read_text(encoding='utf-8').strip()
+          compact = re.sub(r'[\s，。！？、,.!?;；:：]', '', actual)
+          groups = {'water_electric':['水电','水電'],'price':['价格','價格'],'construction':['施工']}
+          hits = {k:any(v in compact for v in vals) for k,vals in groups.items()}
+          ok = bool(actual) and sum(hits.values()) >= 2 and len(compact) >= 10
+          receipt = {
+            'schema':'oing.asr-vad-runtime-proof/v1',
+            'status':'PASS' if ok else 'FAIL',
+            'whisper_cpp':'v1.8.6',
+            'vad_model':'ggml-silero-v6.2.0.bin',
+            'vad_sha256':hashlib.sha256(pathlib.Path('ggml-silero-v6.2.0.bin').read_bytes()).hexdigest(),
+            'model_sha256':hashlib.sha256(pathlib.Path('ggml-base-q5_1.bin').read_bytes()).hexdigest(),
+            'actual_transcript':actual,
+            'keyword_hits':hits,
+            'truth_boundary':'Synthetic Mandarin probe validates local Whisper+Silero VAD runtime, not clean raw editorial quality.'
+          }
+          pathlib.Path('asr_vad_runtime_receipt.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(receipt,ensure_ascii=False,indent=2))
+          if not ok: raise SystemExit(2)
+          PY
+
+      - name: Package portable runtime v3
+        run: |
+          mkdir -p runtime_bundle/bin runtime_bundle/models
+          cp whisper.cpp/build/bin/whisper-cli runtime_bundle/bin/whisper-cli
+          cp ggml-base-q5_1.bin runtime_bundle/models/ggml-base-q5_1.bin
+          cp ggml-silero-v6.2.0.bin runtime_bundle/models/ggml-silero-v6.2.0.bin
+          chmod +x runtime_bundle/bin/whisper-cli
+          sha256sum runtime_bundle/bin/whisper-cli runtime_bundle/models/ggml-base-q5_1.bin runtime_bundle/models/ggml-silero-v6.2.0.bin | tee runtime_bundle/SHA256SUMS.txt
+          VAD_SHA=$(sha256sum ggml-silero-v6.2.0.bin | awk '{print $1}')
+          cat > runtime_bundle/RUNTIME_MANIFEST.json <<JSON
+          {
+            "schema":"oing.asr-runtime-bundle/v3",
+            "platform":"linux-x86_64",
+            "whisper_cpp":"v1.8.6",
+            "build_shared_libs":false,
+            "ggml_native":false,
+            "model":"ggml-base-q5_1.bin",
+            "model_sha256":"422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+            "vad_model":"ggml-silero-v6.2.0.bin",
+            "vad_sha256":"${VAD_SHA}",
+            "purpose":"Portable sandbox runtime for OING Short-form Editor Brain local ASR + VAD gate"
+          }
+          JSON
+          tar -czf whisper_runtime_linux_x64_vad_portable.tar.gz runtime_bundle
+          sha256sum whisper_runtime_linux_x64_vad_portable.tar.gz | tee whisper_runtime_linux_x64_vad_portable.tar.gz.sha256
+
+      - name: Upload VAD runtime proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: shortform-editor-asr-vad-runtime-proof-v5-portable
+          compression-level: 0
+          path: |
+            asr_vad_runtime_receipt.json
+            whisper_probe_vad.txt
+            whisper_probe_vad.json
+            whisper_vad_runtime.log
+            vad_sha256.txt
+            whisper_runtime_linux_x64_vad_portable.tar.gz
+            whisper_runtime_linux_x64_vad_portable.tar.gz.sha256
+          retention-days: 3
