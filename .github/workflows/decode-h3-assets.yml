@@ -1,0 +1,38 @@
+name: Decode H3 reference assets
+on:
+  push:
+    branches: [h3-ref-assets-20260911]
+    paths:
+      - 'h3-assets-20260911/refs.zip.base64.txt'
+      - '.github/workflows/decode-h3-assets.yml'
+permissions:
+  contents: write
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: h3-ref-assets-20260911
+          fetch-depth: 0
+      - name: Decode reference images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p h3-assets-20260911/public
+          base64 -d h3-assets-20260911/refs.zip.base64.txt > /tmp/refs.zip
+          unzip -jo /tmp/refs.zip -d h3-assets-20260911/public
+          ls -lh h3-assets-20260911/public
+      - name: Commit decoded images
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add h3-assets-20260911/public
+          if git diff --cached --quiet; then
+            echo 'No changes'
+          else
+            git commit -m 'Decode H3 reference assets [skip ci]'
+            git push origin HEAD:h3-ref-assets-20260911
+          fi
